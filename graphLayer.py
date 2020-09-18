@@ -150,7 +150,69 @@ class GraphCon(keras.layers.Layer):
             return keras.backend.sigmoid(y0)
 
 
-def load_data_AC14(ratio):
+def load_data_AC14_initial(ratio):
+    # 获取各种短线的index
+    dataFile = '../N-1/AC14/data_none_cut.mat'
+    data = scio.loadmat(dataFile)
+    dataX = data['conved_Y_load']
+    dataY = data['gotten_VA']
+    dataY2 = data['gotten_VM']
+
+    # 读取线路连接关系，获得节点连接矩阵
+    branch = scio.loadmat('../N-1/AC14/structureY.mat')
+    structure = branch['Y']
+    D = np.diag(np.sum(structure, axis=0)**(-0.5))
+    structure = np.dot(np.dot(D, structure), D)
+    # branch = branch['branch']
+
+    trainData = dataX[:int(dataX.shape[0]*ratio), :]
+    trainLabel = np.concatenate([dataY2[:int(dataX.shape[0]*ratio), :], dataY[:int(dataX.shape[0]*ratio), :]], axis=1)
+    trainA = []
+    for num in range(trainData.shape[0]):
+        trainA.append(structure)
+
+    testData = dataX[int(dataX.shape[0]*ratio):, :]
+    testLabel = np.concatenate([dataY2[int(dataX.shape[0]*ratio):, :], dataY[int(dataX.shape[0]*ratio):, :]], axis=1)
+    testA = []
+    for num in range(testData.shape[0]):
+        testA.append(structure)
+
+    return np.array(trainData), np.array(trainLabel), np.array(trainA), \
+           np.array(testData), np.array(testLabel), np.array(testA)
+
+
+def load_data_AC14_topo1(ratio):
+    # 获取各种短线的index
+    dataFile = '../N-1/AC14/data_cut1.mat'
+    data = scio.loadmat(dataFile)
+    dataX = data['conved_Y_load']
+    dataY = data['gotten_VA']
+    dataY2 = data['gotten_VM']
+
+    # 读取线路连接关系，获得节点连接矩阵
+    branch = scio.loadmat('../N-1/AC14/structure_cut1_Y.mat')
+    structure = branch['Y']
+    D = np.diag(np.sum(structure, axis=0)**(-0.5))
+    structure = np.dot(np.dot(D, structure), D)
+    # branch = branch['branch']
+
+    trainData = dataX[:int(dataX.shape[0]*ratio), :]
+    trainLabel = np.concatenate([dataY2[:int(dataX.shape[0]*ratio), :], dataY[:int(dataX.shape[0]*ratio), :]], axis=1)
+    trainA = []
+    for num in range(trainData.shape[0]):
+        trainA.append(structure)
+
+    testData = dataX[int(dataX.shape[0]*ratio):, :]
+    testLabel = np.concatenate([dataY2[int(dataX.shape[0]*ratio):, :], dataY[int(dataX.shape[0]*ratio):, :]], axis=1)
+    testA = []
+    for num in range(testData.shape[0]):
+        testA.append(structure)
+
+    return np.array(trainData), np.array(trainLabel), np.array(trainA), \
+           np.array(testData), np.array(testLabel), np.array(testA)
+
+
+def load_data_AC14_topo2(ratio):
     # 获取各种短线的index
     dataFile = '../N-1/AC14/data_cut2.mat'
     data = scio.loadmat(dataFile)
@@ -159,8 +221,8 @@ def load_data_AC14(ratio):
     dataY2 = data['gotten_VM']
 
     # 读取线路连接关系，获得节点连接矩阵
-    branch = scio.loadmat('../N-1/AC14/structure_cut2_0_1.mat')
-    structure = branch['structure']
+    branch = scio.loadmat('../N-1/AC14/structure_cut2_Y.mat')
+    structure = branch['Y']
     D = np.diag(np.sum(structure, axis=0)**(-0.5))
     structure = np.dot(np.dot(D, structure), D)
     # branch = branch['branch']
@@ -192,14 +254,22 @@ def Z_Score(trainData):
 
 if __name__ == "__main__":
     # 准备训练集
-    trainData, trainLabel, trainA, testData, testLabel, testA = load_data_AC14(0.9)
+    trainData0, trainLabel0, trainA0, testData0, testLabel0, testA0 = load_data_AC14_initial(0.9)
+    trainData1, trainLabel1, trainA1, testData1, testLabel1, testA1 = load_data_AC14_topo1(0.9)
+    trainData2, trainLabel2, trainA2, testData2, testLabel2, testA2 = load_data_AC14_topo2(0.9)
+
+    # trainData = np.concatenate([trainData0, trainData1[:500, :]], axis=0)
+    # trainLabel = np.concatenate([trainLabel0, trainLabel1[:500, :]], axis=0)
+    # trainA = np.concatenate([trainA0, trainA1[:500, :]], axis=0)
 
     # 对数据进行归一化处理
-    trainData, mu1, sgma1 = Z_Score(trainData)
-    trainLabel, mu, sgma = Z_Score(trainLabel)
+    trainData, mu1, sgma1 = Z_Score(trainData0)
+    trainLabel, mu, sgma = Z_Score(trainLabel0)
 
-    testData = (testData-mu1)/sgma1
+    testData = (testData1-mu1)/sgma1
     testData[np.isnan(testData)] = 0
+    testLabel = testLabel1
+    testA = testA1
 
     beta = 0
     fa = 0.01
@@ -208,7 +278,7 @@ if __name__ == "__main__":
     net = NewNetwork(beta, fa, lr, batch_size, 14)
     # net.load('./logs/20200904T1552/model_0500.h5')
     net.load('./logs/model.h5')
-    # net.train(trainData, trainLabel, trainA, epoch_num=100)
+    # net.train(trainData, trainLabel, trainA0, epoch_num=100)
 
     res = net.predict(testData, testA)
     # res = np.concatenate([res[:, :, 0], res[:, :, 1]], axis=1)
