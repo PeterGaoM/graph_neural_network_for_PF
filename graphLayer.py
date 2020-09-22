@@ -27,8 +27,9 @@ class NewNetwork():
 
     def new_loss2(self, y_true, y_pred):
         loss1 = keras.losses.mse(y_true, y_pred)
-        loss2 = tf.math.reduce_variance(y_true-y_pred)
-        return loss1 + loss2
+        loss2 = tf.math.reduce_max(y_true-y_pred)
+        # loss3 = (y_true-y_pred)*tf.math.log(y_true-y_pred)
+        return loss2 + loss1
 
     def build_model(self):
         # 定义网络的输入
@@ -37,7 +38,8 @@ class NewNetwork():
 
         # 浅层有功无功的特征提取
         layer_pq1 = GraphCon(4, 128, activation='relu', name='layer_p1')([input_pq, input_A])
-        layer_pq2 = GraphCon(4, 64, activation='relu', name='layer_p2')([layer_pq1, input_A])
+        layer_pq2 = GraphCon(4, 128, activation='relu', name='layer_p2')([layer_pq1, input_A])
+        layer_pq3 = GraphCon(4, 64, activation='relu', name='layer_p3')([layer_pq2, input_A])
         # layer_pq3 = GraphCon(4, 256, activation='relu', name='layer_p3')([layer_pq2, input_A])
         # # layer_pq3 = keras.layers.BatchNormalization()(layer_pq3)
         # layer_pq4 = GraphCon(4, 256, activation='relu', name='layer_p4')([layer_pq3, input_A])
@@ -47,10 +49,10 @@ class NewNetwork():
         # layer_pq8 = GraphCon(4, 128, activation='relu', name='layer_p8')([layer_pq7, input_A])
         # output = GraphCon(1, 2, activation='linear', name='output')([layer_pq2, input_A])
 
-        output1 = keras.layers.Flatten()(layer_pq2)
+        output1 = keras.layers.Flatten()(layer_pq3)
         # # x3 = keras.layers.BatchNormalization()(x3)
-        # output1 = keras.layers.Dense(200, activation='relu', kernel_regularizer=keras.regularizers.l2(self.fa))(x3)
-        output = keras.layers.Dense(self.node_size * 2, activation='linear', name='output')(output1)
+        output2 = keras.layers.Dense(200, activation='relu')(output1)
+        output = keras.layers.Dense(self.node_size * 2, activation='linear', name='output')(output2)
         # self.model = keras.Model(inputs=[input_pq, input_A], outputs=[output, layer_pq5, layer_pq4, layer_pq3, layer_pq2, layer_pq1])
         self.model = keras.Model(inputs=[input_pq, input_A],
                                  outputs=[output])
@@ -82,9 +84,9 @@ class NewNetwork():
         ]
         data_gen = self.data_generator(train_images, train_labels, trainA)
         self.model.fit(data_gen,
-                       steps_per_epoch=10000,
+                       steps_per_epoch=3000,
                        epochs=epoch_num,
-                       shuffle=False,
+                       shuffle=True,
                        verbose=1,
                        callbacks=callbacks)
 
@@ -161,6 +163,8 @@ def load_data_AC14_initial(ratio):
     # 读取线路连接关系，获得节点连接矩阵
     branch = scio.loadmat('../N-1/AC14/structureY.mat')
     structure = branch['Y']
+    # for x in range(structure.shape[0]):
+    #     structure[x, x] = 0
     D = np.diag(np.sum(structure, axis=0)**(-0.5))
     structure = np.dot(np.dot(D, structure), D)
     # branch = branch['branch']
@@ -247,8 +251,10 @@ def Z_Score(trainData):
     trainData = np.array(trainData)
     mean_train = np.mean(trainData, axis=0)
     std_train = np.std(trainData, axis=0)
+    std_train[std_train<0.0001] = 0
     trainData = (trainData - mean_train) / std_train
     trainData[np.isnan(trainData)] = 0
+    trainData[np.isinf(trainData)] = 0
     return trainData, mean_train, std_train
 
 
@@ -258,33 +264,41 @@ if __name__ == "__main__":
     trainData1, trainLabel1, trainA1, testData1, testLabel1, testA1 = load_data_AC14_topo1(0.9)
     trainData2, trainLabel2, trainA2, testData2, testLabel2, testA2 = load_data_AC14_topo2(0.9)
 
-    # trainData = np.concatenate([trainData0, trainData1[:500, :]], axis=0)
-    # trainLabel = np.concatenate([trainLabel0, trainLabel1[:500, :]], axis=0)
-    # trainA = np.concatenate([trainA0, trainA1[:500, :]], axis=0)
+    trainData = np.concatenate([trainData0, trainData2[:5, :]], axis=0)
+    trainLabel = np.concatenate([trainLabel0, trainLabel2[:5, :]], axis=0)
+    trainA = np.concatenate([trainA0, trainA2[:5, :]], axis=0)
 
-    # 对数据进行归一化处理
-    trainData, mu1, sgma1 = Z_Score(trainData0)
-    trainLabel, mu, sgma = Z_Score(trainLabel0)
+    # 训练集处理
+    trainLabel[:, :14] = trainLabel[:, :14]**2
+    trainData, mu1, sgma1 = Z_Score(trainData)
+    trainLabel, mu, sgma = Z_Score(trainLabel)
+    trainA = trainA
 
-    testData = (testData1-mu1)/sgma1
+    testLabel = testLabel0
+    # testLabel[:, :14] = testLabel[:, :14] ** 2
+    testData = (testData0-mu1)/sgma1
     testData[np.isnan(testData)] = 0
-    testLabel = testLabel1
-    testA = testA1
+    testA = testA0
 
     beta = 0
     fa = 0.01
-    lr = 0.001
+    lr = 0.0001
     batch_size = 200
     net = NewNetwork(beta, fa, lr, batch_size, 14)
     # net.load('./logs/20200904T1552/model_0500.h5')
     net.load('./logs/model.h5')
-    # net.train(trainData, trainLabel, trainA0, epoch_num=100)
+    net.train(trainData, trainLabel, trainA, epoch_num=5)
 
     res = net.predict(testData, testA)
     # res = np.concatenate([res[:, :, 0], res[:, :, 1]], axis=1)
     # res = np.dot(res, pinv(A))
     # recover_res = res * sgma + mu
-    deta = res * sgma+mu - testLabel
+    # temp = (testLabel-mu)/sgma
+    # temp[np.isnan(temp)] = 0
+    res_recover = res * sgma + mu
+    res_recover[:, :14] = res_recover[:, :14]**0.5
+    deta = res_recover - testLabel
+    # deta = (res - trainLabel)
     deta = np.abs(deta)
     deta1 = deta.copy()
     deta1 = deta1[:, 14:]
@@ -293,7 +307,7 @@ if __name__ == "__main__":
 
     deta2 = deta.copy()
     deta2 = deta2[:, :14]
-    deta2[deta2 < 0.0001] = 1
+    deta2[deta2 < 0.001] = 1
     deta2[deta2 != 1] = 0
 
     print(np.mean(deta1), np.mean(deta2))
