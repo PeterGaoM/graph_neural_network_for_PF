@@ -7,6 +7,9 @@ from numpy.linalg import inv, pinv
 import matplotlib.pyplot as plt
 import scipy.io as scio
 import scipy.stats as stats
+from data_load import load_data_and_topology
+
+from layers import GraphCon_complex_kernal as GraphCon
 
 
 class NewNetwork():
@@ -33,29 +36,22 @@ class NewNetwork():
 
     def build_model(self):
         # 定义网络的输入
-        input_pq = keras.Input(shape=(self.node_size, 2), name='input_pq')
-        input_A = keras.Input(shape=(self.node_size, self.node_size), name='input_A')
+        input_p = keras.Input(shape=(self.node_size, 1), name='input_p')
+        input_q = keras.Input(shape=(self.node_size, 1), name='input_q')
+        input_A_real = keras.Input(shape=(self.node_size, self.node_size), name='input_A_real')
+        input_A_img = keras.Input(shape=(self.node_size, self.node_size), name='input_A_img')
 
-        # 浅层有功无功的特征提取
-        layer_pq1 = GraphCon(4, 128, activation='relu', name='layer_p1')([input_pq, input_A])
-        layer_pq2 = GraphCon(4, 128, activation='relu', name='layer_p2')([layer_pq1, input_A])
-        layer_pq3 = GraphCon(4, 64, activation='relu', name='layer_p3')([layer_pq2, input_A])
-        # layer_pq3 = GraphCon(4, 256, activation='relu', name='layer_p3')([layer_pq2, input_A])
-        # # layer_pq3 = keras.layers.BatchNormalization()(layer_pq3)
-        # layer_pq4 = GraphCon(4, 256, activation='relu', name='layer_p4')([layer_pq3, input_A])
-        # layer_pq5 = GraphCon(4, 128, activation='relu', name='layer_p5')([layer_pq4, input_A])
-        # layer_pq6 = GraphCon(4, 128, activation='relu', name='layer_p6')([layer_pq5, input_A])
-        # layer_pq7 = GraphCon(4, 128, activation='relu', name='layer_p7')([layer_pq6, input_A])
-        # layer_pq8 = GraphCon(4, 128, activation='relu', name='layer_p8')([layer_pq7, input_A])
-        # output = GraphCon(1, 2, activation='linear', name='output')([layer_pq2, input_A])
+        layer_p1, input_q1 = GraphCon(4, 128, activation='relu', name='layer_p1')([input_p, input_q, input_A_real, input_A_img])
+        layer_p2, input_q2 = GraphCon(4, 128, activation='relu', name='layer_p2')([layer_p1, input_q1, input_A_real, input_A_img])
+        layer_p3, input_q3 = GraphCon(4, 64, activation='relu', name='layer_p3')([layer_p2, input_q2, input_A_real, input_A_img])
+        layer_p4, input_q4 = GraphCon(4, 16, activation='relu', name='layer_p4')([layer_p3, input_q3, input_A_real, input_A_img])
+        layer_p5, input_q5 = GraphCon(4, 16, activation='relu', name='layer_p5')([layer_p4, input_q4, input_A_real, input_A_img])
+        layer_p6, input_q6 = GraphCon(4, 4, activation='relu', name='layer_p6')([layer_p5, input_q5, input_A_real, input_A_img])
+        layer_p7, input_q7 = GraphCon(4, 4, activation='relu', name='layer_p7')([layer_p6, input_q6, input_A_real, input_A_img])
+        output_p, output_q = GraphCon(4, 1, activation='relu', name='output')([layer_p7, input_q7, input_A_real, input_A_img])
 
-        output1 = keras.layers.Flatten()(layer_pq3)
-        # # x3 = keras.layers.BatchNormalization()(x3)
-        output2 = keras.layers.Dense(200, activation='relu')(output1)
-        output = keras.layers.Dense(self.node_size * 2, activation='linear', name='output')(output2)
-        # self.model = keras.Model(inputs=[input_pq, input_A], outputs=[output, layer_pq5, layer_pq4, layer_pq3, layer_pq2, layer_pq1])
-        self.model = keras.Model(inputs=[input_pq, input_A],
-                                 outputs=[output])
+        self.model = keras.Model(inputs=[input_p, input_q, input_A_real, input_A_img],
+                                 outputs=[output_p, output_p])
         optimizer = keras.optimizers.Adam(lr=self.lr, decay=1e-6)
         # optimizer = keras.optimizers.SGD(lr=self.lr, decay=1e-6, momentum=0.8)
         self.model.compile(optimizer=optimizer,
@@ -100,10 +96,16 @@ class NewNetwork():
                 to_idx = (k + 1) * self.batch_size
                 trainx = train_images[idx[from_idx:to_idx], :]
                 trainy = train_labels[idx[from_idx:to_idx], :]
-                traina = trainA[idx[from_idx:to_idx], :, :]
-                yield {'input_pq': np.concatenate([trainx[:, :self.node_size, np.newaxis], trainx[:, self.node_size:, np.newaxis]], axis=-1),
-                       'input_A': traina}, \
-                      {'output': trainy}
+                traina = trainA[idx[from_idx:to_idx], :, :, :]
+                train_p = trainx[:, :119, np.newaxis]
+                train_q = trainx[:, 119:, np.newaxis]
+                train_G = traina[:, :, :, 0]
+                train_B = traina[:, :, :, 1]
+                train_v = trainy[:, :119, np.newaxis]
+                train_seta = trainy[:, 119:, np.newaxis]
+
+                yield {'input_p': train_p, 'input_q': train_q, "input_A_real": train_G, "input_A_img": train_B}, \
+                      {'output': train_v, "output":train_seta}
                       # {'output': np.concatenate([trainy[:, :self.node_size, np.newaxis], trainy[:, self.node_size:, np.newaxis]], axis=-1)}
 
 
@@ -114,137 +116,6 @@ class NewNetwork():
     def predict(self, inputs, testA):
         res = self.model.predict([np.concatenate([inputs[:, :self.node_size, np.newaxis], inputs[:, self.node_size:, np.newaxis]], axis=-1), testA])
         return res
-
-
-class GraphCon(keras.layers.Layer):
-    def __init__(self, iteration, num_outputs, activation="sigmoid", **kwargs):
-        super(GraphCon, self).__init__(**kwargs)
-        self.num_outputs = num_outputs
-        self.activation_function = activation
-        self.iteration = iteration
-
-    def build(self, input_shape):
-        # Weights
-        # temp = input_shape[0]
-        self.W = {}
-        for n in range(self.iteration):
-            self.W["W_"+str(n)] = self.add_weight("W_"+str(n),
-                                  shape=(int(input_shape[0][-1]), self.num_outputs),
-                                  initializer='random_normal',
-                                  trainable=True)
-        # self.bias = self.add_weight("bias",
-        #                             shape=[self.num_outputs],
-        #                             initializer='random_normal', trainable=True)
-
-    def call(self, inputs):
-        input_ = inputs[0]
-        A = inputs[1]
-        y0 = keras.backend.dot(input_, self.W["W_0"])
-        for n in range(1, self.iteration):
-            input_ = keras.backend.batch_dot(A, input_)
-            y_temp = keras.backend.dot(input_, self.W["W_"+str(n)])
-            y0 = tf.keras.layers.Add()([y0, y_temp])
-        if self.activation_function == 'relu':
-            return keras.backend.relu(y0)
-        elif self.activation_function == "linear":
-            return y0
-        else:
-            return keras.backend.sigmoid(y0)
-
-
-def load_data_AC14_initial(ratio):
-    # 获取各种短线的index
-    dataFile = '../N-1/AC14/data_none_cut.mat'
-    data = scio.loadmat(dataFile)
-    dataX = data['conved_Y_load']
-    dataY = data['gotten_VA']
-    dataY2 = data['gotten_VM']
-
-    # 读取线路连接关系，获得节点连接矩阵
-    branch = scio.loadmat('../N-1/AC14/structureY.mat')
-    structure = branch['Y']
-    # for x in range(structure.shape[0]):
-    #     structure[x, x] = 0
-    D = np.diag(np.sum(structure, axis=0)**(-0.5))
-    structure = np.dot(np.dot(D, structure), D)
-    # branch = branch['branch']
-
-    trainData = dataX[:int(dataX.shape[0]*ratio), :]
-    trainLabel = np.concatenate([dataY2[:int(dataX.shape[0]*ratio), :], dataY[:int(dataX.shape[0]*ratio), :]], axis=1)
-    trainA = []
-    for num in range(trainData.shape[0]):
-        trainA.append(structure)
-
-    testData = dataX[int(dataX.shape[0]*ratio):, :]
-    testLabel = np.concatenate([dataY2[int(dataX.shape[0]*ratio):, :], dataY[int(dataX.shape[0]*ratio):, :]], axis=1)
-    testA = []
-    for num in range(testData.shape[0]):
-        testA.append(structure)
-
-    return np.array(trainData), np.array(trainLabel), np.array(trainA), \
-           np.array(testData), np.array(testLabel), np.array(testA)
-
-
-def load_data_AC14_topo1(ratio):
-    # 获取各种短线的index
-    dataFile = '../N-1/AC14/data_cut1.mat'
-    data = scio.loadmat(dataFile)
-    dataX = data['conved_Y_load']
-    dataY = data['gotten_VA']
-    dataY2 = data['gotten_VM']
-
-    # 读取线路连接关系，获得节点连接矩阵
-    branch = scio.loadmat('../N-1/AC14/structure_cut1_Y.mat')
-    structure = branch['Y']
-    D = np.diag(np.sum(structure, axis=0)**(-0.5))
-    structure = np.dot(np.dot(D, structure), D)
-    # branch = branch['branch']
-
-    trainData = dataX[:int(dataX.shape[0]*ratio), :]
-    trainLabel = np.concatenate([dataY2[:int(dataX.shape[0]*ratio), :], dataY[:int(dataX.shape[0]*ratio), :]], axis=1)
-    trainA = []
-    for num in range(trainData.shape[0]):
-        trainA.append(structure)
-
-    testData = dataX[int(dataX.shape[0]*ratio):, :]
-    testLabel = np.concatenate([dataY2[int(dataX.shape[0]*ratio):, :], dataY[int(dataX.shape[0]*ratio):, :]], axis=1)
-    testA = []
-    for num in range(testData.shape[0]):
-        testA.append(structure)
-
-    return np.array(trainData), np.array(trainLabel), np.array(trainA), \
-           np.array(testData), np.array(testLabel), np.array(testA)
-
-
-def load_data_AC14_topo2(ratio):
-    # 获取各种短线的index
-    dataFile = '../N-1/AC14/data_cut2.mat'
-    data = scio.loadmat(dataFile)
-    dataX = data['conved_Y_load']
-    dataY = data['gotten_VA']
-    dataY2 = data['gotten_VM']
-
-    # 读取线路连接关系，获得节点连接矩阵
-    branch = scio.loadmat('../N-1/AC14/structure_cut2_Y.mat')
-    structure = branch['Y']
-    D = np.diag(np.sum(structure, axis=0)**(-0.5))
-    structure = np.dot(np.dot(D, structure), D)
-    # branch = branch['branch']
-
-    trainData = dataX[:int(dataX.shape[0]*ratio), :]
-    trainLabel = np.concatenate([dataY2[:int(dataX.shape[0]*ratio), :], dataY[:int(dataX.shape[0]*ratio), :]], axis=1)
-    trainA = []
-    for num in range(trainData.shape[0]):
-        trainA.append(structure)
-
-    testData = dataX[int(dataX.shape[0]*ratio):, :]
-    testLabel = np.concatenate([dataY2[int(dataX.shape[0]*ratio):, :], dataY[int(dataX.shape[0]*ratio):, :]], axis=1)
-    testA = []
-    for num in range(testData.shape[0]):
-        testA.append(structure)
-
-    return np.array(trainData), np.array(trainLabel), np.array(trainA), \
-           np.array(testData), np.array(testLabel), np.array(testA)
 
 
 def Z_Score(trainData):
@@ -260,36 +131,28 @@ def Z_Score(trainData):
 
 if __name__ == "__main__":
     # 准备训练集
-    trainData0, trainLabel0, trainA0, testData0, testLabel0, testA0 = load_data_AC14_initial(0.9)
-    trainData1, trainLabel1, trainA1, testData1, testLabel1, testA1 = load_data_AC14_topo1(0.9)
-    trainData2, trainLabel2, trainA2, testData2, testLabel2, testA2 = load_data_AC14_topo2(0.9)
-
-    trainData = np.concatenate([trainData0, trainData2[:5, :]], axis=0)
-    trainLabel = np.concatenate([trainLabel0, trainLabel2[:5, :]], axis=0)
-    trainA = np.concatenate([trainA0, trainA2[:5, :]], axis=0)
+    trainData, trainLabel, trainA, testData, testLabel, testA = load_data_and_topology("../N-1/AC118/data_n-1_118.mat", 0.4)
 
     # 训练集处理
-    trainLabel[:, :14] = trainLabel[:, :14]**2
+    trainLabel[:, :119] = trainLabel[:, :119]**2
     trainData, mu1, sgma1 = Z_Score(trainData)
     trainLabel, mu, sgma = Z_Score(trainLabel)
     trainA = trainA
 
-    testLabel = testLabel0
     # testLabel[:, :14] = testLabel[:, :14] ** 2
-    testData = (testData0-mu1)/sgma1
+    testData = (testData-mu1)/sgma1
     testData[np.isnan(testData)] = 0
-    testA = testA0
 
     beta = 0
     fa = 0.01
-    lr = 0.0001
+    lr = 0.001
     batch_size = 200
-    net = NewNetwork(beta, fa, lr, batch_size, 14)
+    net = NewNetwork(beta, fa, lr, batch_size, 119)
     # net.load('./logs/20200904T1552/model_0500.h5')
-    net.load('./logs/model.h5')
+    # net.load('./logs/model.h5')
     net.train(trainData, trainLabel, trainA, epoch_num=5)
 
-    res = net.predict(testData, testA)
+    # res = net.predict(testData, testA)
     # res = np.concatenate([res[:, :, 0], res[:, :, 1]], axis=1)
     # res = np.dot(res, pinv(A))
     # recover_res = res * sgma + mu
