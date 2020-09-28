@@ -9,7 +9,7 @@ import scipy.io as scio
 import scipy.stats as stats
 from data_load import load_data_and_topology
 
-from layers import GraphCon_complex_kernal as GraphCon
+from layers import GraphCon
 
 
 class NewNetwork():
@@ -118,6 +118,112 @@ class NewNetwork():
         return res
 
 
+class Network_real_kernal():
+    def __init__(self, beta, fa, lr, batch_size, node_size):
+        self.beta = beta
+        self.lr = lr
+        self.batch_size = batch_size
+        self.fa = fa
+        self.model = None
+        self.node_size = node_size
+        self.build_model()
+
+    def new_loss(self, y_true, y_pred):
+        var = keras.losses.mse(y_true, y_pred)
+        # var = tf.math.reduce_variance(y_pred)
+        loss = 1/(var + 1)
+        return loss
+
+    def new_loss2(self, y_true, y_pred):
+        loss1 = keras.losses.mse(y_true, y_pred)
+        loss2 = tf.math.reduce_max(y_true-y_pred)
+        # loss3 = (y_true-y_pred)*tf.math.log(y_true-y_pred)
+        return loss2 + loss1
+
+    def build_model(self):
+        input_pq = keras.Input(shape=(self.node_size, 2), name='input_pq')
+        input_A = keras.Input(shape=(self.node_size, self.node_size), name='input_A')
+
+        # 浅层有功无功的特征提取
+        layer_pq1 = GraphCon(4, 128, activation='relu', name='layer_p1')([input_pq, input_A])
+        layer_pq2 = GraphCon(4, 128, activation='relu', name='layer_p2')([layer_pq1, input_A])
+        # layer_pq3 = GraphCon(4, 64, activation='relu', name='layer_p3')([layer_pq2, input_A])
+        layer_pq3 = GraphCon(4, 256, activation='relu', name='layer_p3')([layer_pq2, input_A])
+        # layer_pq3 = keras.layers.BatchNormalization()(layer_pq3)
+        layer_pq4 = GraphCon(4, 256, activation='relu', name='layer_p4')([layer_pq3, input_A])
+        layer_pq5 = GraphCon(4, 128, activation='relu', name='layer_p5')([layer_pq4, input_A])
+        layer_pq6 = GraphCon(4, 128, activation='relu', name='layer_p6')([layer_pq5, input_A])
+        layer_pq7 = GraphCon(4, 64, activation='relu', name='layer_p7')([layer_pq6, input_A])
+        layer_pq8 = GraphCon(4, 64, activation='relu', name='layer_p8')([layer_pq7, input_A])
+        # output = GraphCon(1, 2, activation='linear', name='output')([layer_pq2, input_A])
+
+        output1 = keras.layers.Flatten()(layer_pq8)
+        # # x3 = keras.layers.BatchNormalization()(x3)
+        output2 = keras.layers.Dense(400, activation='relu')(output1)
+        output = keras.layers.Dense(self.node_size * 2, activation='linear', name='output')(output2)
+        # self.model = keras.Model(inputs=[input_pq, input_A], outputs=[output, layer_pq5, layer_pq4, layer_pq3, layer_pq2, layer_pq1])
+        self.model = keras.Model(inputs=[input_pq, input_A],
+                                 outputs=[output])
+        optimizer = keras.optimizers.Adam(lr=self.lr, decay=1e-6)
+        # optimizer = keras.optimizers.SGD(lr=self.lr, decay=1e-6, momentum=0.8)
+        self.model.compile(optimizer=optimizer,
+                           loss='mse',
+                           metrics=["accuracy"])
+        # sgd = keras.optimizers.SGD(lr=self.lr)
+        # self.model.compile(loss=self.new_loss, optimizer=sgd, metrics=["accuracy"])
+        # # self.model.compile(loss='categorical_crossentropy', optimizer=sgd, metrics=["accuracy"])
+        self.model.summary()
+        keras.utils.plot_model(self.model, 'model_graph.png', show_shapes=True)
+
+    def train(self, train_images,  train_labels, trainA, epoch_num):
+        now = datetime.datetime.now()
+        self.log_dir = os.path.join('./logs', "{:%Y%m%dT%H%M}".format(now))
+
+        # Path to save after each epoch. Include placeholders that get filled by Keras.
+        self.checkpoint_path = os.path.join(self.log_dir, "model_*epoch*.h5")
+        self.checkpoint_path = self.checkpoint_path.replace(
+            "*epoch*", "{epoch:04d}")
+        # Callbacks
+        callbacks = [
+            keras.callbacks.TensorBoard(log_dir=self.log_dir,
+                                        histogram_freq=0, write_graph=True, write_images=False),
+            keras.callbacks.ModelCheckpoint(self.checkpoint_path,
+                                            verbose=0, save_weights_only=True),
+        ]
+        data_gen = self.data_generator(train_images, train_labels, trainA)
+        self.model.fit(data_gen,
+                       steps_per_epoch=3000,
+                       epochs=epoch_num,
+                       shuffle=True,
+                       verbose=1,
+                       callbacks=callbacks)
+
+        self.model.save("./logs/model.h5")
+
+    def data_generator(self, train_images, train_labels, trainA):
+        while True:
+            idx = np.random.permutation(train_images.shape[0])
+            for k in range(int(np.ceil(train_images.shape[0] / self.batch_size))):
+                from_idx = k * self.batch_size
+                to_idx = (k + 1) * self.batch_size
+                trainx = train_images[idx[from_idx:to_idx], :]
+                trainy = train_labels[idx[from_idx:to_idx], :]
+                traina = trainA[idx[from_idx:to_idx], :, :]
+                yield {'input_pq': np.concatenate(
+                    [trainx[:, :self.node_size, np.newaxis], trainx[:, self.node_size:, np.newaxis]], axis=-1),
+                       'input_A': traina}, \
+                      {'output': trainy}
+                # {'output': np.concatenate([trainy[:, :self.node_size, np.newaxis], trainy[:, self.node_size:, np.newaxis]], axis=-1)}
+
+    def load(self, model_dir):
+        self.model.load_weights(model_dir)
+        print("Load model:{}".format(model_dir))
+
+    def predict(self, inputs, testA):
+        res = self.model.predict([np.concatenate([inputs[:, :self.node_size, np.newaxis], inputs[:, self.node_size:, np.newaxis]], axis=-1), testA])
+        return res
+
+
 def Z_Score(trainData):
     trainData = np.array(trainData)
     mean_train = np.mean(trainData, axis=0)
@@ -130,46 +236,52 @@ def Z_Score(trainData):
 
 
 if __name__ == "__main__":
+    beta = 0
+    fa = 0.01
+    lr = 0.001
+    batch_size = 20
+    case_size = 119
+    epoch_num = 500
     # 准备训练集
-    trainData, trainLabel, trainA, testData, testLabel, testA = load_data_and_topology("../N-1/AC118/data_n-1_118.mat", 0.4)
+    trainData, trainLabel, trainA, testData, testLabel, testA = load_data_and_topology("../N-1/AC118/data_n-1_118.mat",
+                                                                                       list(range(20)),
+                                                                                       [21, 22, 23, 25, 24])
+    # from data_load import load_data_AC14_initial
+    # trainData, trainLabel, trainA, testData, testLabel, testA = load_data_AC14_initial(0.4)
 
     # 训练集处理
-    trainLabel[:, :119] = trainLabel[:, :119]**2
+    trainLabel[:, :case_size] = trainLabel[:, :case_size]**2
     trainData, mu1, sgma1 = Z_Score(trainData)
     trainLabel, mu, sgma = Z_Score(trainLabel)
-    trainA = trainA
 
     # testLabel[:, :14] = testLabel[:, :14] ** 2
     testData = (testData-mu1)/sgma1
     testData[np.isnan(testData)] = 0
 
-    beta = 0
-    fa = 0.01
-    lr = 0.001
-    batch_size = 200
-    net = NewNetwork(beta, fa, lr, batch_size, 119)
+
+    net = Network_real_kernal(beta, fa, lr, batch_size, case_size)
     # net.load('./logs/20200904T1552/model_0500.h5')
     # net.load('./logs/model.h5')
-    net.train(trainData, trainLabel, trainA, epoch_num=5)
+    net.train(trainData, trainLabel, trainA, epoch_num)
 
-    # res = net.predict(testData, testA)
+    res = net.predict(testData, testA)
     # res = np.concatenate([res[:, :, 0], res[:, :, 1]], axis=1)
     # res = np.dot(res, pinv(A))
     # recover_res = res * sgma + mu
     # temp = (testLabel-mu)/sgma
     # temp[np.isnan(temp)] = 0
     res_recover = res * sgma + mu
-    res_recover[:, :14] = res_recover[:, :14]**0.5
+    res_recover[:, :case_size] = res_recover[:, :case_size]**0.5
     deta = res_recover - testLabel
     # deta = (res - trainLabel)
     deta = np.abs(deta)
     deta1 = deta.copy()
-    deta1 = deta1[:, 14:]
+    deta1 = deta1[:, case_size:]
     deta1[deta1 < 0.286] = 1
     deta1[deta1 != 1] = 0
 
     deta2 = deta.copy()
-    deta2 = deta2[:, :14]
+    deta2 = deta2[:, :case_size]
     deta2[deta2 < 0.001] = 1
     deta2[deta2 != 1] = 0
 

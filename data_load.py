@@ -7,7 +7,7 @@ import h5py
 import scipy.stats as stats
 
 
-def load_data_and_topology(data_dir, ratio):
+def load_data_and_topology(data_dir, train_index, test_index):
     # 获取各种短线的index
     dataFile = '../N-1/AC118/data_n-1_118.mat'
 
@@ -16,6 +16,7 @@ def load_data_and_topology(data_dir, ratio):
     # data = scio.loadmat(dataFile)
     dataX = data['conved_Y_load'].value.T
     dataY = data['gotten_VA'].value.T
+    dataY = dataY-dataY[:, 68][:, np.newaxis]
     dataY2 = data['gotten_VM'].value.T
 
     # 获取电导和电纳,
@@ -23,29 +24,39 @@ def load_data_and_topology(data_dir, ratio):
     G = np.reshape(G, [dataX.shape[0], 119, 119])
     B = dataX[:, 119*119:119*119*2]
     B = np.reshape(B, [dataX.shape[0], 119, 119])
-    structure = np.concatenate([G[:, :, :, np.newaxis], B[:, :, :, np.newaxis]], axis=3)
-    dataX = dataX[:, 119*119*2:]
+    structure0 = (G**2+B**2)**0.5
+    structure = []
+    for x in range(structure0.shape[0]):
+        D = np.diag(np.sum(structure0[x, :, :], axis=0) ** (-0.5))
+        structure.append(np.dot(np.dot(D, structure0[x, :, :]), D))
+
+    structure = np.array(structure)
+
+    dataX = dataX[:, 119 * 119 * 2:]
     dataY = np.concatenate([dataY2, dataY], axis=1)
+    temp = np.sum(np.sum(structure, axis=1), axis=1)
     trainData = []
     trainLabel = []
     trainA = []
-    for x in range(int(189*ratio)):
-        for index in range(x, 20000, 189):
-            trainData.append(dataX[index, :])
-            trainLabel.append(dataY[index, :])
-            trainA.append(structure[index, :, :, :])
+    for x in train_index:
+        res = np.where(temp == temp[x])[0]
+        trainData.extend(dataX[res, :])
+        trainLabel.extend(dataY[res, :])
+        trainA.extend(structure[res, :, :])
+
 
     testData = []
     testLabel = []
     testA = []
-    for x in range(int(189 * ratio), 189, 1):
-        for index in range(x, 20000, 189):
-            testData.append(dataX[index, :])
-            testLabel.append(dataY[index, :])
-            testA.append(structure[index, :, :, :])
+    for x in test_index:
+        res = np.where(temp == temp[x])[0]
+        testData.extend(dataX[res, :])
+        testLabel.extend(dataY[res, :])
+        testA.extend(structure[res, :, :])
 
     return np.array(trainData), np.array(trainLabel), np.array(trainA), \
            np.array(testData), np.array(testLabel), np.array(testA)
+
 
 def load_data_AC14_initial(ratio):
     # 获取各种短线的index
@@ -146,3 +157,4 @@ def load_data_AC14_topo2(ratio):
 
 if __name__=="__main__":
     res = load_data_and_topology("../N-1/AC118/data_n-1_118.mat", 0.9)
+    print(123)
