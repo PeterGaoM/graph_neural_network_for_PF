@@ -9,7 +9,7 @@ import scipy.io as scio
 import scipy.stats as stats
 from data_load import load_data_and_topology
 
-from layers import GraphCon
+from layers import GraphCon, ResNet50
 
 
 class NewNetwork():
@@ -143,25 +143,7 @@ class Network_real_kernal():
     def build_model(self):
         input_pq = keras.Input(shape=(self.node_size, 2), name='input_pq')
         input_A = keras.Input(shape=(self.node_size, self.node_size), name='input_A')
-
-        # 浅层有功无功的特征提取
-        layer_pq1 = GraphCon(4, 128, activation='relu', name='layer_p1')([input_pq, input_A])
-        layer_pq2 = GraphCon(4, 128, activation='relu', name='layer_p2')([layer_pq1, input_A])
-        # layer_pq3 = GraphCon(4, 64, activation='relu', name='layer_p3')([layer_pq2, input_A])
-        layer_pq3 = GraphCon(4, 256, activation='relu', name='layer_p3')([layer_pq2, input_A])
-        # layer_pq3 = keras.layers.BatchNormalization()(layer_pq3)
-        layer_pq4 = GraphCon(4, 256, activation='relu', name='layer_p4')([layer_pq3, input_A])
-        layer_pq5 = GraphCon(4, 128, activation='relu', name='layer_p5')([layer_pq4, input_A])
-        layer_pq6 = GraphCon(4, 128, activation='relu', name='layer_p6')([layer_pq5, input_A])
-        layer_pq7 = GraphCon(4, 64, activation='relu', name='layer_p7')([layer_pq6, input_A])
-        layer_pq8 = GraphCon(4, 64, activation='relu', name='layer_p8')([layer_pq7, input_A])
-        # output = GraphCon(1, 2, activation='linear', name='output')([layer_pq2, input_A])
-
-        output1 = keras.layers.Flatten()(layer_pq8)
-        # # x3 = keras.layers.BatchNormalization()(x3)
-        output2 = keras.layers.Dense(400, activation='relu')(output1)
-        output = keras.layers.Dense(self.node_size * 2, activation='linear', name='output')(output2)
-        # self.model = keras.Model(inputs=[input_pq, input_A], outputs=[output, layer_pq5, layer_pq4, layer_pq3, layer_pq2, layer_pq1])
+        output = ResNet50(input_pq, input_A)
         self.model = keras.Model(inputs=[input_pq, input_A],
                                  outputs=[output])
         optimizer = keras.optimizers.Adam(lr=self.lr, decay=1e-6)
@@ -175,7 +157,7 @@ class Network_real_kernal():
         self.model.summary()
         keras.utils.plot_model(self.model, 'model_graph.png', show_shapes=True)
 
-    def train(self, train_images,  train_labels, trainA, epoch_num):
+    def train(self, train_images, train_labels, trainA, testData, testLabel, testA, epoch_num):
         now = datetime.datetime.now()
         self.log_dir = os.path.join('./logs', "{:%Y%m%dT%H%M}".format(now))
 
@@ -192,7 +174,7 @@ class Network_real_kernal():
         ]
         data_gen = self.data_generator(train_images, train_labels, trainA)
         self.model.fit(data_gen,
-                       steps_per_epoch=3000,
+                       steps_per_epoch=2000,
                        epochs=epoch_num,
                        shuffle=True,
                        verbose=1,
@@ -212,8 +194,8 @@ class Network_real_kernal():
                 yield {'input_pq': np.concatenate(
                     [trainx[:, :self.node_size, np.newaxis], trainx[:, self.node_size:, np.newaxis]], axis=-1),
                        'input_A': traina}, \
-                      {'output': trainy}
-                # {'output': np.concatenate([trainy[:, :self.node_size, np.newaxis], trainy[:, self.node_size:, np.newaxis]], axis=-1)}
+                      {'output': np.concatenate(
+                          [trainy[:, :self.node_size, np.newaxis], trainy[:, self.node_size:, np.newaxis]], axis=-1)}
 
     def load(self, model_dir):
         self.model.load_weights(model_dir)
@@ -238,31 +220,30 @@ def Z_Score(trainData):
 if __name__ == "__main__":
     beta = 0
     fa = 0.01
-    lr = 0.001
+    lr = 0.01
     batch_size = 20
-    case_size = 119
+    case_size = 188
     epoch_num = 500
     # 准备训练集
     trainData, trainLabel, trainA, testData, testLabel, testA = load_data_and_topology("../N-1/AC118/data_n-1_118.mat",
-                                                                                       list(range(20)),
-                                                                                       [21, 22, 23, 25, 24])
+                                                                                       list(range(100)),
+                                                                                       list(range(100, 180, 1)))
     # from data_load import load_data_AC14_initial
     # trainData, trainLabel, trainA, testData, testLabel, testA = load_data_AC14_initial(0.4)
 
     # 训练集处理
-    trainLabel[:, :case_size] = trainLabel[:, :case_size]**2
+    # trainLabel[:, :case_size] = trainLabel[:, :case_size]**2
     trainData, mu1, sgma1 = Z_Score(trainData)
     trainLabel, mu, sgma = Z_Score(trainLabel)
 
-    # testLabel[:, :14] = testLabel[:, :14] ** 2
+    # testLabel[:, :case_size] = testLabel[:, :case_size] ** 2
     testData = (testData-mu1)/sgma1
     testData[np.isnan(testData)] = 0
-
 
     net = Network_real_kernal(beta, fa, lr, batch_size, case_size)
     # net.load('./logs/20200904T1552/model_0500.h5')
     # net.load('./logs/model.h5')
-    net.train(trainData, trainLabel, trainA, epoch_num)
+    net.train(trainData, trainLabel, trainA, testData, testLabel, testA, epoch_num)
 
     res = net.predict(testData, testA)
     # res = np.concatenate([res[:, :, 0], res[:, :, 1]], axis=1)
@@ -282,7 +263,7 @@ if __name__ == "__main__":
 
     deta2 = deta.copy()
     deta2 = deta2[:, :case_size]
-    deta2[deta2 < 0.001] = 1
+    deta2[deta2 < 0.0001] = 1
     deta2[deta2 != 1] = 0
 
     print(np.mean(deta1), np.mean(deta2))
